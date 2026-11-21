@@ -1,0 +1,244 @@
+'use client';
+import { useEffect, useRef, useState } from 'react';
+import * as THREE from 'three';
+import { supabase } from '@/lib/supabase';
+
+export default function PlayGamePage() {
+  const mountRef = useRef(null);
+  const [coinsEarned, setCoinsEarned] = useState(0);
+  const [userId, setUserId] = useState(null);
+  const [mode, setMode] = useState('arena');
+  const [gameTitle, setGameTitle] = useState('BloxHub Experience');
+  const [statusText, setStatusText] = useState('WASD / Arrows to Move • SPACE to Jump');
+  const [tycoonLevel, setTycoonLevel] = useState(1);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const currentMode = params.get('mode') || 'arena';
+    const currentTitle = params.get('title') || 'BloxHub Experience';
+    setMode(currentMode);
+    setGameTitle(currentTitle);
+
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session?.user) setUserId(session.user.id);
+    });
+
+    if (currentMode === 'tycoon') {
+      setStatusText('Click Dropper or Buy Upgrades to generate coins!');
+      return;
+    }
+
+    const scene = new THREE.Scene();
+    const skyColors = { obby: 0x0ea5e9, pirate: 0x0284c7, city: 0x3b82f6, survival: 0x450a0a, arena: 0x0f172a };
+    scene.background = new THREE.Color(skyColors[currentMode] || 0x0f172a);
+
+    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    mountRef.current.appendChild(renderer.domElement);
+
+    scene.add(new THREE.AmbientLight(0xffffff, 0.85));
+    const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    dirLight.position.set(10, 20, 10);
+    scene.add(dirLight);
+
+    const player = new THREE.Mesh(
+      new THREE.BoxGeometry(1, 2, 1),
+      new THREE.MeshStandardMaterial({ color: 0x2563eb })
+    );
+    player.position.set(0, 1.5, 0);
+    scene.add(player);
+
+    const platforms = [];
+    const hazards = [];
+
+    if (currentMode === 'obby') {
+      setStatusText('Jump across floating blocks to reach the Gold Crown (+25 Coins)!');
+      for (let i = 0; i < 12; i++) {
+        const plat = new THREE.Mesh(
+          new THREE.BoxGeometry(3.5, 0.6, 3.5),
+          new THREE.MeshStandardMaterial({ color: i === 11 ? 0xfacc15 : i % 2 === 0 ? 0x10b981 : 0x34d399 })
+        );
+        plat.position.set((i % 2 === 0 ? 1.5 : -1.5), i * 1.1, -i * 4.5);
+        scene.add(plat);
+        platforms.push(plat);
+      }
+    } else if (currentMode === 'city') {
+      setStatusText('Explore the city streets and collect city bonuses!');
+      const road = new THREE.Mesh(new THREE.PlaneGeometry(60, 60), new THREE.MeshStandardMaterial({ color: 0x334155 }));
+      road.rotation.x = -Math.PI / 2;
+      scene.add(road);
+      const colors = [0xef4444, 0xf59e0b, 0x8b5cf6, 0xec4899];
+      for (let i = 0; i < 8; i++) {
+        const house = new THREE.Mesh(new THREE.BoxGeometry(5, 6, 5), new THREE.MeshStandardMaterial({ color: colors[i % 4] }));
+        house.position.set((i % 2 === 0 ? -10 : 10), 3, -i * 7 + 15);
+        scene.add(house);
+      }
+    } else if (currentMode === 'survival') {
+      setStatusText('Dodge the red lava spinners and grab coins!');
+      const floor = new THREE.Mesh(new THREE.PlaneGeometry(35, 35), new THREE.MeshStandardMaterial({ color: 0x18181b }));
+      floor.rotation.x = -Math.PI / 2;
+      scene.add(floor);
+      for (let i = 0; i < 4; i++) {
+        const lava = new THREE.Mesh(new THREE.BoxGeometry(8, 0.6, 1), new THREE.MeshStandardMaterial({ color: 0xdc2626 }));
+        lava.position.set((i - 1.5) * 6, 0.3, (i % 2 === 0 ? 4 : -4));
+        scene.add(lava);
+        hazards.push(lava);
+      }
+    } else {
+      const floorColor = currentMode === 'pirate' ? 0xfde047 : 0x1e293b;
+      const floor = new THREE.Mesh(new THREE.PlaneGeometry(45, 45), new THREE.MeshStandardMaterial({ color: floorColor }));
+      floor.rotation.x = -Math.PI / 2;
+      scene.add(floor);
+    }
+
+    const target = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.7, 0.7, 0.25, 16),
+      new THREE.MeshStandardMaterial({ color: currentMode === 'pirate' ? 0xa855f7 : 0xfacc15 })
+    );
+    target.rotation.x = Math.PI / 2;
+    target.position.set(0, currentMode === 'obby' ? 13.5 : 1, currentMode === 'obby' ? -49.5 : -6);
+    scene.add(target);
+
+    let velY = 0;
+    let onGround = false;
+    const keys = {};
+    const onKeyDown = (e) => {
+      keys[e.key.toLowerCase()] = true;
+      if (e.code === 'Space' && onGround) {
+        velY = 0.32;
+        onGround = false;
+      }
+    };
+    const onKeyUp = (e) => (keys[e.key.toLowerCase()] = false);
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+
+    let animId;
+    const animate = () => {
+      animId = requestAnimationFrame(animate);
+      if (keys['w'] || keys['arrowup']) player.position.z -= 0.16;
+      if (keys['s'] || keys['arrowdown']) player.position.z += 0.16;
+      if (keys['a'] || keys['arrowleft']) player.position.x -= 0.16;
+      if (keys['d'] || keys['arrowright']) player.position.x += 0.16;
+
+      velY -= 0.015;
+      player.position.y += velY;
+
+      if (currentMode === 'obby') {
+        onGround = false;
+        for (const p of platforms) {
+          if (
+            Math.abs(player.position.x - p.position.x) < 2 &&
+            Math.abs(player.position.z - p.position.z) < 2 &&
+            player.position.y - 1 <= p.position.y + 0.3 &&
+            player.position.y - 1 >= p.position.y - 0.8 &&
+            velY <= 0
+          ) {
+            player.position.y = p.position.y + 1.3;
+            velY = 0;
+            onGround = true;
+          }
+        }
+        if (player.position.y < -10) {
+          player.position.set(0, 2, 0);
+          velY = 0;
+        }
+      } else if (player.position.y <= 1) {
+        player.position.y = 1;
+        velY = 0;
+        onGround = true;
+      }
+
+      hazards.forEach((h, idx) => {
+        h.rotation.y += 0.03 * (idx % 2 === 0 ? 1 : -1);
+        if (player.position.distanceTo(h.position) < 2.2) {
+          player.position.set(0, 1, 10);
+        }
+      });
+
+      target.rotation.z += 0.05;
+      camera.position.set(player.position.x, player.position.y + 7, player.position.z + 11);
+      camera.lookAt(player.position);
+
+      if (player.position.distanceTo(target.position) < 1.8) {
+        if (currentMode === 'obby') {
+          player.position.set(0, 2, 0);
+          setCoinsEarned((c) => c + 25);
+        } else {
+          target.position.set((Math.random() - 0.5) * 30, 1, (Math.random() - 0.5) * 30);
+          setCoinsEarned((c) => c + 5);
+        }
+      }
+      renderer.render(scene, camera);
+    };
+    animate();
+
+    return () => {
+      cancelAnimationFrame(animId);
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+      if (mountRef.current) mountRef.current.innerHTML = '';
+    };
+  }, []);
+
+  useEffect(() => {
+    if (mode !== 'tycoon') return;
+    const timer = setInterval(() => {
+      setCoinsEarned((c) => c + tycoonLevel * 2);
+    }, 1500);
+    return () => clearInterval(timer);
+  }, [mode, tycoonLevel]);
+
+  const claimCoins = async () => {
+    if (!userId || coinsEarned === 0) return;
+    await supabase.rpc('increment_coins', { user_id_input: userId, amount_input: coinsEarned });
+    alert(`Saved ${coinsEarned} coins to your wallet!`);
+    setCoinsEarned(0);
+  };
+
+  return (
+    <div className="relative w-screen h-screen overflow-hidden bg-slate-950 text-white">
+      <div className="absolute top-4 left-4 right-4 z-10 flex flex-wrap items-center justify-between gap-3 bg-slate-900/90 p-3 rounded-xl border border-slate-700">
+        <div className="flex items-center gap-3">
+          <a href="/" className="bg-slate-700 hover:bg-slate-600 px-3 py-1.5 rounded text-sm font-bold">Exit</a>
+          <span className="font-black text-blue-400">{gameTitle}</span>
+          <span className="font-bold text-yellow-400">Session Coins: {coinsEarned}</span>
+          <button onClick={claimCoins} className="bg-green-600 hover:bg-green-500 px-3 py-1.5 rounded text-sm font-bold">
+            Claim to Wallet
+          </button>
+        </div>
+        <span className="text-xs text-slate-300">{statusText}</span>
+      </div>
+
+      {mode === 'tycoon' ? (
+        <div className="h-full flex flex-col items-center justify-center p-6 space-y-6">
+          <h1 className="text-3xl font-black text-amber-400">{gameTitle} (Level {tycoonLevel})</h1>
+          <p className="text-slate-400">Auto-generating +{tycoonLevel * 2} coins every 1.5 seconds</p>
+          <div className="flex gap-4">
+            <button
+              onClick={() => setCoinsEarned((c) => c + tycoonLevel)}
+              className="bg-amber-500 hover:bg-amber-400 text-slate-950 font-black px-6 py-4 rounded-xl text-lg shadow-lg"
+            >
+              Click Dropper (+{tycoonLevel} Coins)
+            </button>
+            <button
+              onClick={() => {
+                const cost = tycoonLevel * 20;
+                if (coinsEarned >= cost) {
+                  setCoinsEarned((c) => c - cost);
+                  setTycoonLevel((l) => l + 1);
+                } else alert(`Need ${cost} Session Coins to upgrade!`);
+              }}
+              className="bg-blue-600 hover:bg-blue-500 font-bold px-6 py-4 rounded-xl text-lg"
+            >
+              Upgrade Factory ({tycoonLevel * 20} Coins)
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div ref={mountRef} />
+      )}
+    </div>
+  );
+}
